@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<title>Text Editor</title>
+<style type="text/css">
+html,body { margin:0; padding:0; height:100%; background:#141414;
+  font-family:Verdana,Arial,sans-serif; font-size:12px; color:#c8c8c8; }
+#bar { padding:6px; background:#1f1f1f; border-bottom:1px solid #333; }
+#bar select, #bar input { font-family:Verdana,Arial,sans-serif; font-size:12px; padding:1px;
+  border:1px solid #444; background:#2a2a2a; color:#ddd; }
+#bar button { font-family:Verdana,Arial,sans-serif; font-size:11px; height:22px; border:1px solid #444;
+  background:#2a2a2a; color:#ccc; cursor:pointer; padding:0 6px; vertical-align:middle; }
+#bar button:hover { background:#383838; }
+.sw { width:26px !important; padding:0 !important; border:1px solid #555 !important; }
+.sw.on { border:2px solid #fff !important; }
+.gap { margin-left:14px; }
+#ed { display:block; width:100%; height:100%; border:0; padding:14px; margin:0;
+  font-family:Georgia,"Times New Roman",serif; font-size:16px; color:#e6e6e6; background:#1a1a1a;
+  line-height:1.5; resize:none; outline:none; }
+#wrap { position:absolute; top:35px; left:0; right:0; bottom:22px; }
+#status { position:absolute; left:0; right:0; bottom:0; height:21px; line-height:21px;
+  background:#1f1f1f; border-top:1px solid #333; padding:0 8px; font-size:11px; color:#8a8a8a; }
+.screen { padding:24px; max-width:520px; color:#c8c8c8; }
+.screen h2 { font-size:15px; margin:0 0 4px 0; color:#eee; }
+.screen p { margin:0 0 12px 0; line-height:1.5; }
+.screen label { display:block; margin:8px 0 2px 0; font-size:11px; color:#9a9a9a; }
+.screen input[type=text], .screen input[type=password] { width:100%; font-size:13px; padding:4px;
+  border:1px solid #444; background:#2a2a2a; color:#eee; font-family:Verdana,Arial,sans-serif; }
+.screen .go { margin-top:14px; padding:6px 14px; font-size:13px; background:#2a2a2a;
+  color:#eee; border:1px solid #555; cursor:pointer; }
+.err { color:#ff6b6b; margin-top:10px; font-size:12px; }
+.note { color:#7d7d7d; font-size:11px; line-height:1.5; margin-top:12px; }
+.note a, #bar a { color:#7fb2ff; }
+#banner { display:none; background:#2e2a18; border-bottom:1px solid #5a5024; padding:6px 8px;
+  font-size:11px; color:#e2d9a8; }
+#banner a { color:#9cc4ff; }
+</style>
+</head>
+<body>
+
+<div id="setup" class="screen" style="display:none">
+  <h2>Point it at your repo</h2>
+  <p>These are stored in this browser only. Nothing else is sent anywhere except GitHub.</p>
+  <label>GitHub username</label><input type="text" id="cOwner">
+  <label>Repository name</label><input type="text" id="cRepo" value="text-editor">
+  <label>Branch</label><input type="text" id="cBranch" value="main">
+  <label>File path</label><input type="text" id="cPath" value="document.enc">
+  <label>Fine-grained token (Contents: read and write, on this repo only)</label>
+  <input type="password" id="cToken">
+  <button class="go" onclick="saveCfg()">Continue</button>
+  <div class="note">The token stays in this browser. Anyone using this browser profile can read it.</div>
+  <div class="err" id="setupErr"></div>
+</div>
+
+<div id="lock" class="screen" style="display:none">
+  <h2>Password</h2>
+  <p>The document is encrypted with this. Lose it and the text is gone for good.</p>
+  <input type="password" id="pw" value="3952">
+  <button class="go" onclick="unlock()">Open</button>
+  <div class="err" id="lockErr"></div>
+  <div class="note" id="lockNote"></div>
+</div>
+
+<div id="app" style="display:none">
+  <div id="bar">
+    <span>Size</span>
+    <select id="size" onchange="setSize(this.value)">
+      <option>12</option><option>14</option><option selected>16</option><option>18</option>
+      <option>20</option><option>24</option><option>28</option><option>32</option>
+      <option>40</option><option>48</option><option>64</option>
+    </select>
+    <span class="gap">Color</span>
+    <button class="sw" title="White"  style="background:#e6e6e6" onclick="setColor('#e6e6e6',this)"></button>
+    <button class="sw" title="Gray"   style="background:#9aa0a6" onclick="setColor('#9aa0a6',this)"></button>
+    <button class="sw" title="Red"    style="background:#ff6b6b" onclick="setColor('#ff6b6b',this)"></button>
+    <button class="sw" title="Orange" style="background:#ffa94d" onclick="setColor('#ffa94d',this)"></button>
+    <button class="sw" title="Green"  style="background:#69db7c" onclick="setColor('#69db7c',this)"></button>
+    <button class="sw" title="Blue"   style="background:#74c0fc" onclick="setColor('#74c0fc',this)"></button>
+    <button class="sw" title="Purple" style="background:#b197fc" onclick="setColor('#b197fc',this)"></button>
+    <span class="gap"></span>
+    <button onclick="pushNow()">Save now</button>
+    <button onclick="lockNow()">Lock</button>
+  </div>
+  <div id="banner"></div>
+  <div id="wrap"><textarea id="ed" spellcheck="false"></textarea></div>
+  <div id="status">ready</div>
+</div>
+
+<script type="text/javascript">
+/* ---------- crypto ---------- */
+var TE=(function(){
+  var exp=[],log=[],sbox=[],m2=[],m3=[];
+  function xt(b){return ((b<<1)^(b&0x80?0x1b:0))&0xff;}
+  function rotl(b,n){return ((b<<n)|(b>>(8-n)))&0xff;}
+  function mul(a,b){return (a&&b)?exp[(log[a]+log[b])%255]:0;}
+  (function(){var x=1,i;
+    for(i=0;i<255;i++){exp[i]=x;log[x]=i;x=x^xt(x);}
+    for(i=0;i<256;i++){var v=i?exp[(255-log[i])%255]:0;
+      sbox[i]=(v^rotl(v,1)^rotl(v,2)^rotl(v,3)^rotl(v,4)^0x63)&0xff;}
+    for(i=0;i<256;i++){m2[i]=mul(2,i);m3[i]=mul(3,i);}
+  })();
+  function expandKey(key){
+    var w=[],i,t;
+    for(i=0;i<8;i++)w[i]=(key[4*i]<<24)|(key[4*i+1]<<16)|(key[4*i+2]<<8)|key[4*i+3];
+    for(i=8;i<60;i++){
+      t=w[i-1];
+      if(i%8===0){
+        t=((t<<8)|(t>>>24))&0xffffffff;
+        t=(sbox[(t>>>24)&255]<<24)|(sbox[(t>>>16)&255]<<16)|(sbox[(t>>>8)&255]<<8)|sbox[t&255];
+        t=t^((1<<(i/8-1))<<24);
+      }else if(i%4===0){
+        t=(sbox[(t>>>24)&255]<<24)|(sbox[(t>>>16)&255]<<16)|(sbox[(t>>>8)&255]<<8)|sbox[t&255];
+      }
+      w[i]=(w[i-8]^t)&0xffffffff;
+    }
+    return w;
+  }
+  function encBlock(inp,w){
+    var s=[],i,r,c,a0,a1,a2,a3,n;
+    for(i=0;i<16;i++)s[i]=inp[i]&0xff;
+    for(r=0;r<=14;r++){
+      if(r>0){
+        for(i=0;i<16;i++)s[i]=sbox[s[i]];
+        n=[];
+        for(c=0;c<4;c++)for(var row=0;row<4;row++)n[4*c+row]=s[4*((c+row)%4)+row];
+        s=n;
+        if(r<14){
+          for(c=0;c<4;c++){
+            a0=s[4*c];a1=s[4*c+1];a2=s[4*c+2];a3=s[4*c+3];
+            s[4*c]=m2[a0]^m3[a1]^a2^a3;
+            s[4*c+1]=a0^m2[a1]^m3[a2]^a3;
+            s[4*c+2]=a0^a1^m2[a2]^m3[a3];
+            s[4*c+3]=m3[a0]^a1^a2^m2[a3];
+          }
+        }
+      }
+      for(c=0;c<4;c++){var word=w[r*4+c];
+        s[4*c]^=(word>>>24)&255;s[4*c+1]^=(word>>>16)&255;
+        s[4*c+2]^=(word>>>8)&255;s[4*c+3]^=word&255;}
+    }
+    return s;
+  }
+  function ctr(key,iv,data){
+    var w=expandKey(key),out=[],ctrb=iv.slice(0),off=0,ks,j;
+    while(off<data.length){
+      ks=encBlock(ctrb,w);
+      for(j=0;j<16&&off<data.length;j++){out.push(data[off]^ks[j]);off++;}
+      for(j=15;j>=0;j--){ctrb[j]=(ctrb[j]+1)&0xff;if(ctrb[j])break;}
+    }
+    return out;
+  }
+  var K=[0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
+  function sha256(bytes){
+    var H=[0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
+    var l=bytes.length,ml=l*8,msg=bytes.slice(0);
+    msg.push(0x80);
+    while(msg.length%64!==56)msg.push(0);
+    var hi=Math.floor(ml/4294967296),lo=ml>>>0;
+    msg.push((hi>>>24)&255,(hi>>>16)&255,(hi>>>8)&255,hi&255,(lo>>>24)&255,(lo>>>16)&255,(lo>>>8)&255,lo&255);
+    var w=[],i,j;
+    for(i=0;i<msg.length;i+=64){
+      for(j=0;j<16;j++)w[j]=((msg[i+4*j]<<24)|(msg[i+4*j+1]<<16)|(msg[i+4*j+2]<<8)|msg[i+4*j+3])|0;
+      for(j=16;j<64;j++){
+        var s0=((w[j-15]>>>7)|(w[j-15]<<25))^((w[j-15]>>>18)|(w[j-15]<<14))^(w[j-15]>>>3);
+        var s1=((w[j-2]>>>17)|(w[j-2]<<15))^((w[j-2]>>>19)|(w[j-2]<<13))^(w[j-2]>>>10);
+        w[j]=(w[j-16]+s0+w[j-7]+s1)|0;
+      }
+      var a=H[0],b=H[1],c=H[2],d=H[3],e=H[4],f=H[5],g=H[6],h=H[7];
+      for(j=0;j<64;j++){
+        var S1=((e>>>6)|(e<<26))^((e>>>11)|(e<<21))^((e>>>25)|(e<<7));
+        var t1=(h+S1+((e&f)^(~e&g))+K[j]+w[j])|0;
+        var S0=((a>>>2)|(a<<30))^((a>>>13)|(a<<19))^((a>>>22)|(a<<10));
+        var t2=(S0+((a&b)^(a&c)^(b&c)))|0;
+        h=g;g=f;f=e;e=(d+t1)|0;d=c;c=b;b=a;a=(t1+t2)|0;
+      }
+      H[0]=(H[0]+a)|0;H[1]=(H[1]+b)|0;H[2]=(H[2]+c)|0;H[3]=(H[3]+d)|0;
+      H[4]=(H[4]+e)|0;H[5]=(H[5]+f)|0;H[6]=(H[6]+g)|0;H[7]=(H[7]+h)|0;
+    }
+    var out=[];
+    for(i=0;i<8;i++)out.push((H[i]>>>24)&255,(H[i]>>>16)&255,(H[i]>>>8)&255,H[i]&255);
+    return out;
+  }
+  function hmac(key,msg){
+    var k=key.slice(0),i,ip=[],op=[];
+    if(k.length>64)k=sha256(k);
+    while(k.length<64)k.push(0);
+    for(i=0;i<64;i++){ip.push(k[i]^0x36);op.push(k[i]^0x5c);}
+    return sha256(op.concat(sha256(ip.concat(msg))));
+  }
+  function pbkdf2(pw,salt,iter,n){
+    var out=[],blk=1,i,u,t,j,sb;
+    while(out.length<n){
+      sb=salt.concat([(blk>>>24)&255,(blk>>>16)&255,(blk>>>8)&255,blk&255]);
+      u=hmac(pw,sb);t=u.slice(0);
+      for(i=1;i<iter;i++){u=hmac(pw,u);for(j=0;j<t.length;j++)t[j]^=u[j];}
+      out=out.concat(t);blk++;
+    }
+    return out.slice(0,n);
+  }
+  var B64="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  function b64enc(b){
+    var o="",i,n;
+    for(i=0;i<b.length;i+=3){
+      n=(b[i]<<16)|((i+1<b.length?b[i+1]:0)<<8)|(i+2<b.length?b[i+2]:0);
+      o+=B64.charAt((n>>18)&63)+B64.charAt((n>>12)&63)+
+        (i+1<b.length?B64.charAt((n>>6)&63):"=")+(i+2<b.length?B64.charAt(n&63):"=");
+    }
+    return o;
+  }
+  function b64dec(s){
+    var o=[],i,n,c,j;
+    s=(""+s).replace(/[^A-Za-z0-9+\/=]/g,"");
+    for(i=0;i<s.length;i+=4){
+      n=0;
+      for(j=0;j<4;j++){c=s.charAt(i+j);n=(n<<6)|(c==="="||c===""?0:B64.indexOf(c));}
+      o.push((n>>16)&255);
+      if(s.charAt(i+2)!=="="&&i+2<s.length)o.push((n>>8)&255);
+      if(s.charAt(i+3)!=="="&&i+3<s.length)o.push(n&255);
+    }
+    return o;
+  }
+  function utf8(s){
+    var e,i,o=[];
+    try{e=unescape(encodeURIComponent(s));}catch(x){e=s;}
+    for(i=0;i<e.length;i++)o.push(e.charCodeAt(i)&255);
+    return o;
+  }
+  function unutf8(b){
+    var s="",i;
+    for(i=0;i<b.length;i++)s+=String.fromCharCode(b[i]);
+    try{return decodeURIComponent(escape(s));}catch(x){return s;}
+  }
+  function rnd(n){
+    var o=[],i;
+    try{
+      if(window.crypto&&window.crypto.getRandomValues){
+        var a=new Uint8Array(n);window.crypto.getRandomValues(a);
+        for(i=0;i<n;i++)o.push(a[i]);return o;
+      }
+    }catch(x){}
+    for(i=0;i<n;i++)o.push(Math.floor(Math.random()*256));
+    return o;
+  }
+  function derive(pw,salt,iter){
+    var dk=pbkdf2(utf8(pw),salt,iter,64);
+    return {kEnc:dk.slice(0,32),kMac:dk.slice(32,64)};
+  }
+  function sealWith(d,salt,plain){
+    var iv=rnd(16),ct=ctr(d.kEnc,iv,utf8(plain));
+    var tag=hmac(d.kMac,salt.concat(iv).concat(ct));
+    return "TE1\n20000\n"+b64enc(salt)+"\n"+b64enc(iv)+"\n"+b64enc(tag)+"\n"+b64enc(ct)+"\n";
+  }
+  function parse(blob){
+    var L=(""+blob).replace(/^\uFEFF/,"").replace(/\r/g,"").split("\n");
+    if(L[0]!=="TE1")return null;
+    return {iter:parseInt(L[1],10)||20000,salt:b64dec(L[2]),iv:b64dec(L[3]),
+            tag:b64dec(L[4]),ct:b64dec(L[5]||"")};
+  }
+  function openWith(d,p){
+    var tag=hmac(d.kMac,p.salt.concat(p.iv).concat(p.ct));
+    if(tag.length!==p.tag.length)return null;
+    for(var i=0;i<tag.length;i++)if(tag[i]!==p.tag[i])return null;
+    return unutf8(ctr(d.kEnc,p.iv,p.ct));
+  }
+  return {sha256:sha256,hmac:hmac,pbkdf2:pbkdf2,b64enc:b64enc,b64dec:b64dec,
+          utf8:utf8,unutf8:unutf8,rnd:rnd,derive:derive,sealWith:sealWith,openWith:openWith,parse:parse,
+          _ctr:ctr};
+})();
+
+/* ---------- app ---------- */
+var cfg=null, sess=null, dirty=false, rev=0, lastSha=null, busy=false, timer=null, pending=null;
+
+function $(id){return document.getElementById(id);}
+function ls(k,v){
+  try{
+    if(v===undefined)return localStorage.getItem(k);
+    if(v===null)localStorage.removeItem(k);else localStorage.setItem(k,v);
+  }catch(e){}
+  return null;
+}
+function say(t){$('status').innerHTML=t;}
+
+function xhr(method,url,body,headers,cb){
+  var x=null,i;
+  try{x=new XMLHttpRequest();}catch(e){
+    var names=["Msxml2.XMLHTTP","Microsoft.XMLHTTP"];
+    for(i=0;i<names.length&&!x;i++){try{x=new ActiveXObject(names[i]);}catch(e2){}}
+  }
+  if(!x){cb(-1,"","no xhr");return;}
+  try{
+    x.open(method,url,true);
+    for(var h in headers){if(headers.hasOwnProperty(h))x.setRequestHeader(h,headers[h]);}
+    x.onreadystatechange=function(){
+      if(x.readyState===4)cb(x.status,x.responseText,"");
+    };
+    x.send(body||null);
+  }catch(e){cb(-1,"",e.message||"xhr failed");}
+}
+
+function apiPath(){
+  return "https://api.github.com/repos/"+encodeURIComponent(cfg.owner)+"/"+
+         encodeURIComponent(cfg.repo)+"/contents/"+
+         cfg.path.split("/").map(encodeURIComponent).join("/");
+}
+function authHeaders(){
+  return {"Authorization":"token "+cfg.token,"Accept":"application/vnd.github+json",
+          "Content-Type":"application/json"};
+}
+function pick(text,re){var m=text.match(re);return m?m[1]:null;}
+
+function startSetup(){
+  $('setup').style.display='block';
+  var saved=ls('te.cfg');
+  if(saved){
+    try{var c=JSON.parse(saved);
+      $('cOwner').value=c.owner||"";$('cRepo').value=c.repo||"";
+      $('cBranch').value=c.branch||"main";$('cPath').value=c.path||"document.enc";
+      $('cToken').value=c.token||"";
+    }catch(e){}
+  }
+  $('cOwner').focus();
+}
+function saveCfg(){
+  var c={owner:$('cOwner').value.replace(/^\s+|\s+$/g,""),
+         repo:$('cRepo').value.replace(/^\s+|\s+$/g,""),
+         branch:$('cBranch').value.replace(/^\s+|\s+$/g,"")||"main",
+         path:$('cPath').value.replace(/^\s+|\s+$/g,"")||"document.enc",
+         token:$('cToken').value.replace(/^\s+|\s+$/g,"")};
+  if(!c.owner||!c.repo||!c.token){$('setupErr').innerHTML="All four fields are needed.";return;}
+  ls('te.cfg',JSON.stringify(c));
+  cfg=c;
+  $('setup').style.display='none';
+  showLock();
+}
+
+function showLock(){
+  $('lock').style.display='block';
+  $('lockNote').innerHTML="Document: "+cfg.owner+"/"+cfg.repo+" &middot; "+cfg.path+
+    " &middot; branch "+cfg.branch+" &middot; <a href='#' onclick='resetCfg();return false'>change</a>";
+  $('pw').focus();
+}
+function resetCfg(){ls('te.cfg',null);cfg=null;$('lock').style.display='none';startSetup();}
+
+/* fetch remote: cb(status, text) where status 200/404/-1 */
+function fetchRemote(cb){
+  xhr("GET",apiPath(),null,authHeaders(),function(st,txt,err){
+    if(st===200){
+      var content=pick(txt,/"content"\s*:\s*"([^"]*)"/);
+      var sha=pick(txt,/"sha"\s*:\s*"([a-f0-9]{7,40})"/);
+      if(content===null){cb(500,txt);return;}
+      cb(200,TE.unutf8(TE.b64dec(content)),sha);
+    }else if(st===404){cb(404,"",null);}
+    else{cb(st,txt,err);}
+  });
+}
+
+function unlock(){
+  var pw=$('pw').value;
+  if(!pw){$('lockErr').innerHTML="Type the password.";return;}
+  $('lockErr').innerHTML="";
+  $('lock').style.display='none';
+  $('app').style.display='block';
+  say("contacting GitHub&hellip;");
+  fetchRemote(function(st,text,sha){
+    if(st===404){
+      /* new file */
+      var salt=TE.rnd(16);
+      say("deriving key&hellip;");
+      setTimeout(function(){
+        var d=TE.derive(pw,salt,20000);
+        sess={pw:pw,d:d,salt:salt};
+        lastSha=null;
+        var local=ls('te.local.doc');
+        $('ed').value=local||"";
+        dirty=!!local;
+        applyLook();
+        begin();
+        say("new document &mdash; will be created on first save");
+      },50);
+    }else if(st===200){
+      say("deriving key&hellip;");
+      setTimeout(function(){
+        var p=TE.parse(text);
+        if(!p){fail("That file isn't a document this editor can read.");return;}
+        var d=TE.derive(pw,p.salt,p.iter);
+        var plain=TE.openWith(d,p);
+        if(plain===null){fail("Wrong password.");return;}
+        sess={pw:pw,d:d,salt:p.salt};
+        lastSha=sha;
+        $('ed').value=plain;
+        dirty=false;
+        ls('te.local.doc',plain);
+        applyLook();
+        begin();
+        say("opened &middot; "+plain.length+" characters");
+      },50);
+    }else{
+      fail("GitHub said "+(st===401?"401 bad token":st)+". Check the token and repo name.");
+      return;
+    }
+    function fail(msg){
+      $('app').style.display='none';
+      $('lock').style.display='block';
+      $('lockErr').innerHTML=msg;
+    }
+  });
+}
+
+function begin(){
+  $('ed').onkeyup=function(){dirty=true;rev++;mark();};
+  $('ed').onchange=function(){dirty=true;rev++;mark();};
+  $('ed').onblur=function(){if(dirty)encryptPush();};
+  if(timer)clearInterval(timer);
+  timer=setInterval(tick,60000);
+}
+function mark(){
+  ls('te.local.doc',$('ed').value);
+  $('status').innerHTML="editing &middot; saves to GitHub every 60s";
+}
+function tick(){
+  if(busy)return;
+  if(dirty){encryptPush();}else{pullCheck();}
+}
+
+function encryptPush(){
+  if(busy||!sess)return;
+  busy=true;
+  var myRev=rev;
+  say("encrypting&hellip;");
+  setTimeout(function(){
+    var blob=TE.sealWith(sess.d,sess.salt,$('ed').value);
+    var body=JSON.stringify({
+      message:"Update "+new Date().toISOString().slice(0,16).replace("T"," "),
+      content:TE.b64enc(TE.utf8(blob)),
+      branch:cfg.branch,
+      sha:lastSha||undefined
+    });
+    say("uploading&hellip;");
+    xhr("PUT",apiPath(),body,authHeaders(),function(st,txt){
+      busy=false;
+      if(st===200||st===201){
+        var sha=pick(txt,/"sha"\s*:\s*"([a-f0-9]{7,40})"/);
+        if(sha)lastSha=sha;
+        if(rev===myRev)dirty=false;
+        say("saved to GitHub &middot; "+new Date().toLocaleTimeString());
+      }else if(st===409||st===422){
+        say("not saved: the file changed on another device");
+        banner("The file changed on another device, so this save was refused. "+
+               "<a href='#' onclick='takeRemote();return false'>Load the other version</a> "+
+               "<a href='#' onclick='forcePush();return false'>Overwrite it with mine</a>");
+      }else{
+        say("not saved &middot; GitHub said "+st+" (text kept on this device)");
+      }
+    });
+  },50);
+}
+function pushNow(){if(dirty)encryptPush();else{pullCheck();}}
+
+function pullCheck(){
+  if(busy||!sess)return;
+  busy=true;
+  fetchRemote(function(st,text,sha){
+    busy=false;
+    if(st!==200||sha===lastSha)return;
+    var p=TE.parse(text);
+    if(!p)return;
+    var plain=TE.openWith(sess.d,p);
+    if(plain===null)return;
+    if(plain===$('ed').value){lastSha=sha;return;}
+    if(dirty){
+      pending={sha:sha,plain:plain};
+      banner("A newer version is on GitHub. "+
+             "<a href='#' onclick='takeRemote();return false'>Load it</a> "+
+             "<a href='#' onclick='forcePush();return false'>Keep mine</a>");
+    }else{
+      lastSha=sha;
+      $('ed').value=plain;
+      ls('te.local.doc',plain);
+      say("updated from another device");
+    }
+  });
+}
+function takeRemote(){
+  banner("");
+  if(!pending)return;
+  $('ed').value=pending.plain;
+  ls('te.local.doc',pending.plain);
+  lastSha=pending.sha;
+  dirty=false;
+  pending=null;
+  say("loaded the version from GitHub");
+}
+function forcePush(){
+  banner("");
+  fetchRemote(function(st,text,sha){lastSha=sha||null;dirty=true;encryptPush();});
+}
+function banner(h){
+  var b=$('banner');
+  if(!h){b.style.display='none';b.innerHTML="";return;}
+  b.style.display='block';b.innerHTML=h;
+}
+
+function lockNow(){
+  if(dirty)encryptPush();
+  sess=null;
+  $('app').style.display='none';
+  $('ed').value="";
+  if(timer)clearInterval(timer);
+  showLock();
+}
+
+/* look */
+function setSize(v){$('ed').style.fontSize=v+"px";ls('te.size',v);}
+function setColor(c,btn){
+  $('ed').style.color=c;ls('te.color',c);
+  var b=document.getElementsByTagName('button'),i;
+  for(i=0;i<b.length;i++)if(b[i].className.indexOf('sw')>-1)b[i].className="sw";
+  if(btn)btn.className="sw on";
+}
+function hexOk(c){
+  /* text must stay readable on the dark page: reject anything dim */
+  var m=/^#([0-9a-f]{6})$/i.exec(c||"");
+  if(!m)return false;
+  var n=parseInt(m[1],16);
+  var r=(n>>16)&255,g=(n>>8)&255,b=n&255;
+  return (r*299+g*587+b*114)/1000>110;
+}
+function applyLook(){
+  var s=ls('te.size'),c=ls('te.color'),i,b;
+  if(s)$('size').value=s;
+  setSize($('size').value);
+  if(!hexOk(c)){ls('te.color',null);c=null;}
+  b=document.getElementsByTagName('button');
+  for(i=0;i<b.length;i++){
+    if(b[i].className.indexOf('sw')>-1){
+      var bg=b[i].style.backgroundColor;
+      b[i].className=("sw"+(c? (bg===c?" on":"") : (bg==="rgb(230, 230, 230)"?" on":"")));
+    }
+  }
+  $('ed').style.color=c||"#e6e6e6";
+}
+
+/* boot */
+(function(){
+  var raw=ls('te.cfg');
+  if(raw){
+    try{cfg=JSON.parse(raw);}catch(e){cfg=null;}
+  }
+  if(cfg&&cfg.owner&&cfg.repo&&cfg.token){showLock();}
+  else{startSetup();}
+})();
+</script>
+</body>
+</html>
